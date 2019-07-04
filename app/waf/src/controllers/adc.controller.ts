@@ -43,12 +43,12 @@ import {
   AS3PartitionRequest,
   as3Name,
 } from '../models';
-import {AdcRepository, AdcTenantAssociationRepository} from '../repositories';
-import {BaseController, Schema, Response, CollectionResponse} from '.';
-import {inject, CoreBindings} from '@loopback/core';
-import {factory} from '../log4ts';
-import {WafBindingKeys} from '../keys';
-import {WafApplication} from '../application';
+import { AdcRepository, AdcTenantAssociationRepository } from '../repositories';
+import { BaseController, Schema, Response, CollectionResponse } from '.';
+import { inject, CoreBindings } from '@loopback/core';
+import { factory } from '../log4ts';
+import { WafBindingKeys } from '../keys';
+import { WafApplication } from '../application';
 import {
   ASGService,
   ASGManager,
@@ -59,7 +59,8 @@ import {
   BigipBuiltInProperties,
   ASGServiceProvider,
 } from '../services';
-import {checkAndWait, merge} from '../utils';
+import { checkAndWait, merge } from '../utils';
+import { readFileSync } from 'fs';
 
 const prefix = '/adcaas/v1';
 
@@ -75,7 +76,7 @@ export class AdcController extends BaseController {
     @inject('services.ASGService')
     public asgService: ASGService,
     //Suppress get injection binding exeption by using {optional: true}
-    @inject(RestBindings.Http.CONTEXT, {optional: true})
+    @inject(RestBindings.Http.CONTEXT, { optional: true })
     protected reqCxt: RequestContext,
     @inject(CoreBindings.APPLICATION_INSTANCE)
     private wafapp: WafApplication,
@@ -149,7 +150,7 @@ export class AdcController extends BaseController {
     };
 
     try {
-      await this.serialize(adc, {status: AdcState.TRUSTING, lastErr: ''});
+      await this.serialize(adc, { status: AdcState.TRUSTING, lastErr: '' });
       //TODO: Need away to input admin password of BIG-IP HW
       let device = await this.asgMgr.trust(
         adc.management.connection!.ipAddress,
@@ -202,8 +203,7 @@ export class AdcController extends BaseController {
 
   async installAS3(adc: Adc): Promise<void> {
     // Install AS3 RPM on target device
-    await this.serialize(adc, {status: AdcState.INSTALLING, lastErr: ''});
-
+    await this.serialize(adc, { status: AdcState.INSTALLING, lastErr: '' });
     try {
       await this.asgMgr.installAS3(adc.management.trustedDeviceId!);
 
@@ -212,7 +212,7 @@ export class AdcController extends BaseController {
         60,
       ).then(
         async () => {
-          await this.serialize(adc, {status: AdcState.INSTALLED, lastErr: ''});
+          await this.serialize(adc, { status: AdcState.INSTALLED, lastErr: '' });
         },
         async err => {
           await this.serialize(adc, {
@@ -235,13 +235,13 @@ export class AdcController extends BaseController {
     let cnct = adc.management.connection!;
     let paritionObj = new AS3PartitionRequest(adc);
     try {
-      await this.serialize(adc, {status: AdcState.PARTITIONING, lastErr: ''});
+      await this.serialize(adc, { status: AdcState.PARTITIONING, lastErr: '' });
       await this.asgMgr.deploy(cnct.ipAddress, cnct.tcpPort, paritionObj);
       await checkAndWait(
         () => this.adcStCtr.gotTo(AdcState.PARTITIONED),
         60,
       ).then(
-        async () => this.serialize(adc, {status: AdcState.ACTIVE, lastErr: ''}),
+        async () => this.serialize(adc, { status: AdcState.ACTIVE, lastErr: '' }),
         async () =>
           this.serialize(adc, {
             status: AdcState.PARTITIONERR,
@@ -261,7 +261,7 @@ export class AdcController extends BaseController {
     responses: {
       '200': {
         description: 'ADC resource count',
-        content: {'application/json': {schema: CountSchema}},
+        content: { 'application/json': { schema: CountSchema } },
       },
     },
   })
@@ -445,25 +445,33 @@ export class AdcController extends BaseController {
       case 'create':
         if (await this.adcStCtr.readyTo(AdcState.POWERON)) {
           this.createOn(adc, addonReq);
-          return {id: adc.id};
+          return { id: adc.id };
         } else
           throw new HttpErrors.UnprocessableEntity(
             `Not ready for bigip VE to : ${AdcState.POWERON}`,
           );
-
       case 'delete':
         if (await this.adcStCtr.readyTo(AdcState.RECLAIMED)) {
           this.deleteOn(adc, addonReq);
-          return {id: adc.id};
+          return { id: adc.id };
         } else
           throw new HttpErrors.UnprocessableEntity(
             `Not ready for bigip VE to : ${AdcState.RECLAIMED}`,
           );
+      case 'do':
+        if (
+          await this.adcStCtr.readyTo(AdcState.DOINSTALLED)) {
+          await this.installDO(adc, addonReq);
+          return { id: adc.id };
+        } else
+          throw new HttpErrors.UnprocessableEntity(
+            `Not ready for bigip VE to : ${AdcState.DOINSTALLED}`,
+          );
 
       case 'setup':
-        if (await this.adcStCtr.readyTo(AdcState.ONBOARDED)) {
+        if (await this.adcStCtr.readyTo(AdcState.DOINSTALLED)) {
           this.setupOn(adc, addonReq);
-          return {id: adc.id};
+          return { id: adc.id };
         } else
           throw new HttpErrors.UnprocessableEntity(
             `Not ready for bigip VE to : ${AdcState.ONBOARDED}`,
@@ -476,12 +484,20 @@ export class AdcController extends BaseController {
 
     let msg = `Cannot do '${Object.keys(actionBody)[0]}' on adc ${
       adc.id
-    }, state: ${adc.status}, lasterr: ${adc.lastErr}`;
+      }, state: ${adc.status}, lasterr: ${adc.lastErr}`;
     this.logger.error(msg);
     throw new HttpErrors.UnprocessableEntity(msg);
   }
 
+  private async installDO(adc: Adc, addon: AddonReqValues): Promise<void> {
+    // install DO
+    await this.doInstalling(adc, addon);
+
+  }
   private async setupOn(adc: Adc, addon: AddonReqValues): Promise<void> {
+
+    // install DO
+
     // onboarding
     if (await this.adcStCtr.readyTo(AdcState.ONBOARDED))
       await this.onboarding(adc, addon);
@@ -505,13 +521,13 @@ export class AdcController extends BaseController {
 
   private async createOn(adc: Adc, addon: AddonReqValues): Promise<void> {
     try {
-      await this.serialize(adc, {status: AdcState.POWERING, lastErr: ''})
+      await this.serialize(adc, { status: AdcState.POWERING, lastErr: '' })
         .then(() => this.cNet(adc, addon))
         .then(() => this.cSvr(adc, addon));
 
       await checkAndWait(() => this.adcStCtr.gotTo(AdcState.POWERON), 240)
         .then(() =>
-          this.serialize(adc, {status: AdcState.POWERON, lastErr: ''}),
+          this.serialize(adc, { status: AdcState.POWERON, lastErr: '' }),
         )
         .catch(error => {
           throw new Error(`Timeout waiting for: ${AdcState.POWERON}`);
@@ -581,7 +597,7 @@ export class AdcController extends BaseController {
     await this.wafapp
       .get(WafBindingKeys.KeyNetworkDriver)
       .then(async networkHelper => {
-        Object.assign(adc, {management: merge(adc.management, {networks: {}})});
+        Object.assign(adc, { management: merge(adc.management, { networks: {} }) });
         for (let k of Object.keys(adc.networks)) {
           let net = adc.networks[k];
           if (adc.management.networks[k] && adc.management.networks[k].portId) {
@@ -657,10 +673,10 @@ export class AdcController extends BaseController {
   }
 
   private async deleteOn(adc: Adc, addon: AddonReqValues): Promise<void> {
-    let reclaimFuncs: {[key: string]: Function} = {
+    let reclaimFuncs: { [key: string]: Function } = {
       license: async () => {
         let doMgr = await OnboardingManager.instanlize(this.wafapp);
-        let doBody = await doMgr.assembleDo(adc, {onboarding: false});
+        let doBody = await doMgr.assembleDo(adc, { onboarding: false });
         this.logger.debug(
           'Json used for revoke license: ' + JSON.stringify(doBody),
         );
@@ -733,15 +749,15 @@ export class AdcController extends BaseController {
         await this.untrustAdc(adc);
       },
 
-      install: () => {},
+      install: () => { },
     };
 
     try {
-      this.serialize(adc, {status: AdcState.RECLAIMING, lastErr: ''});
+      this.serialize(adc, { status: AdcState.RECLAIMING, lastErr: '' });
       for (let f of ['trust', 'license', 'vm', 'network']) {
         await reclaimFuncs[f]();
       }
-      this.serialize(adc, {status: AdcState.RECLAIMED, lastErr: ''});
+      this.serialize(adc, { status: AdcState.RECLAIMED, lastErr: '' });
     } catch (error) {
       this.logger.error(`Reclaiming fails: ${error.message}`);
       this.serialize(adc, {
@@ -751,20 +767,44 @@ export class AdcController extends BaseController {
     }
   }
 
+  private async doInstalling(adc: Adc, addon: AddonReqValues): Promise<void> {
+    try {
+      this.logger.debug('start to install do');
+      await this.serialize(adc, { status: AdcState.DOINSTALLING });
+      let cnct = adc.management.connection!;
+      let bigipMgr = await BigIpManager.instanlize({
+        username: cnct.username,
+        password: cnct.password,
+        ipAddr: cnct.ipAddress,
+        port: cnct.tcpPort,
+      });
+
+      await bigipMgr.uploadDO();
+      // call the uploadDO and installDO in bigip service to upload/install the
+      //DO
+      //copy the RMP to the IP
+      //Install RMP
+    } catch (error) {
+      await this.serialize(adc, {
+        status: AdcState.POWERON,
+        lastErr: `${AdcState.DOINSTALLERR}: ${error}`,
+      });
+    }
+  }
   private async onboarding(adc: Adc, addon: AddonReqValues): Promise<void> {
     try {
       this.logger.debug('start to do onbarding');
-      await this.serialize(adc, {status: AdcState.ONBOARDING});
+      await this.serialize(adc, { status: AdcState.ONBOARDING });
 
       let doMgr = await OnboardingManager.instanlize(this.wafapp);
-      let doBody = await doMgr.assembleDo(adc, {onboarding: true});
+      let doBody = await doMgr.assembleDo(adc, { onboarding: true });
       let doId = await doMgr.onboarding(doBody);
 
       await checkAndWait(() => doMgr.isDone(doId), 240)
         .then(() =>
           checkAndWait(() => this.adcStCtr.gotTo(AdcState.ONBOARDED), 240),
         )
-        .then(() => this.serialize(adc, {status: AdcState.ONBOARDED}));
+        .then(() => this.serialize(adc, { status: AdcState.ONBOARDED }));
     } catch (error) {
       await this.serialize(adc, {
         status: AdcState.ONBOARDERR,
@@ -792,6 +832,12 @@ export class AdcStateCtrlr {
       failure: AdcState.POWERERR,
       state: AdcState.POWERON,
       check: this.accessible,
+      next: [AdcState.DOINSTALLED, AdcState.RECLAIMED],
+    },
+    {
+      failure: AdcState.DOINSTALLERR,
+      state: AdcState.DOINSTALLED,
+      check: this.doInstalled,
       next: [AdcState.ONBOARDED, AdcState.RECLAIMED],
     },
     {
@@ -833,7 +879,7 @@ export class AdcStateCtrlr {
     },
   ];
 
-  constructor(private adc: Adc, private addon: AddonReqValues) {}
+  constructor(private adc: Adc, private addon: AddonReqValues) { }
 
   async readyTo(state: string): Promise<boolean> {
     let stateEntry = this.getStateEntry(this.adc.status);
@@ -899,6 +945,13 @@ export class AdcStateCtrlr {
     );
   }
 
+  private async doInstalled(ctrl: AdcStateCtrlr): Promise<boolean> {
+    let bigipMgr = await ctrl.getBigipMgr();
+    let resObj = await bigipMgr.getDOStatus();
+    let code = JSON.parse(resObj)['body'][0]['result']['status'];
+    return code === "OK";
+  }
+
   private async trusted(ctrl: AdcStateCtrlr): Promise<boolean> {
     if (!ctrl.adc.management.trustedDeviceId) return false;
 
@@ -907,6 +960,7 @@ export class AdcStateCtrlr {
       ctrl.adc.management.trustedDeviceId!,
     );
     return state === 'ACTIVE';
+
   }
 
   private async onboarded(ctrl: AdcStateCtrlr): Promise<boolean> {
@@ -974,6 +1028,10 @@ export enum AdcState {
   POWERING = 'POWERING',
   POWERERR = 'POWERERROR',
 
+  DOINSTALLED = 'DOINSTALLED',
+  DOINSTALLING = 'DOINSTALLING',
+  DOINSTALLERR = 'DOINSTALLERR',
+
   ONBOARDED = 'ONBOARDED',
   ONBOARDING = 'ONBOARDING',
   ONBOARDERR = 'ONBOARDERROR',
@@ -985,6 +1043,7 @@ export enum AdcState {
   INSTALLED = 'INSTALLED',
   INSTALLING = 'INSTALLING',
   INSTALLERR = 'INSTALLERROR',
+  
 
   PARTITIONED = 'PARTITIONED',
   PARTITIONING = 'PARTITIONING',

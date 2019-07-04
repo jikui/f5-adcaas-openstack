@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import {Provider, inject} from '@loopback/core';
-import {BIGIPDataSource} from '../datasources/bigip.datasource';
-import {getService} from '@loopback/service-proxy';
-import {factory} from '../log4ts';
-import {probe} from 'network-utils-tcp-ping';
-import {checkAndWait} from '../utils';
+import { Provider, inject } from '@loopback/core';
+import { BIGIPDataSource } from '../datasources/bigip.datasource';
+import { getService } from '@loopback/service-proxy';
+import { factory } from '../log4ts';
+import { probe } from 'network-utils-tcp-ping';
+import { checkAndWait } from '../utils';
 
 export const BigipBuiltInProperties = {
   admin: 'admin',
@@ -27,14 +27,29 @@ export const BigipBuiltInProperties = {
 };
 
 export interface BigipService {
-  getInfo(url: string, cred64en: string): Promise<object>;
+  getInfo(
+    url: string,
+    cred64en: string,
+  ): Promise<object>;
+  uploadDO(
+    url: string,
+    cred64en: string,
+    end: number,
+    length: number,
+    body: object,
+  ): Promise<object>;
+  installDO(
+    url: string,
+    cred64en: string,
+    body: object,
+  ): Promise<object>;
 }
 
 export class BigipServiceProvider implements Provider<BigipService> {
   constructor(
     @inject('datasources.bigip')
     protected dataSource: BIGIPDataSource = new BIGIPDataSource(),
-  ) {}
+  ) { }
 
   value(): Promise<BigipService> {
     return getService(this.dataSource);
@@ -205,6 +220,44 @@ export class BigIpManager {
     return resObj;
   }
 
+  async getDOStatus(): Promise<string> {
+    await this.mustBeReachable();
+
+    let url = `${this.baseUrl}/mgmt/shared/declarative-onboarding/info`;
+    let response = await this.bigipService.getInfo(url, this.cred64Encoded);
+    let resObj = JSON.stringify(response);
+    return resObj;
+  }
+
+  async uploadDO(): Promise<string> {
+    // if the local file doesn't exist, throw execption.
+    //read the file's contant into a buf and calculate its length
+    //call the bigipService.uploadDO to upload the RPM to Bigip
+    //possibly check  if the upload succeeds or not
+    //await this.mustBeReachable();
+    let url = `${this.baseUrl}/mgmt/shared/file-transfer/uploads/F5_DO_RPM_PACKAGE.rpm`;
+    let fs = require('fs');
+    let buffer = fs.readFileSync("/var/tmp/DO/f5-declarative-onboarding-1.5.0-11.noarch.rpm","binary");
+    let response = await this.bigipService.uploadDO(url, this.cred64Encoded,
+      1536120, 1536121, buffer);
+    let resObj = JSON.stringify(response);
+    return resObj;
+  }
+  async installDO(): Promise<string> {
+    // create the body with following format.
+    await this.mustBeReachable();
+    let body = {
+      "operation": "INSTALL",
+      "packageFilePath": "/var/config/rest/downloads/F5_DO_RPM_PACKAGE.rpm"
+    };
+    // call the bigipService.installDO to install the RPM
+    //possibly check if the install succeeds or not.
+    let url = `${this.baseUrl}mgmt/shared/iapp/package-management-tasks`;
+    let response = await this.bigipService.installDO(url,this.cred64Encoded,body)
+    let resObj = JSON.stringify(response);
+    return resObj;
+
+  }
   async getAS3Info(): Promise<object> {
     await this.mustBeReachable();
 
@@ -276,10 +329,10 @@ export class BigIpManager {
     if (!(await this.reachable()))
       throw new Error(
         'Host unreachable: ' +
-          JSON.stringify({
-            ipaddr: this.config.ipAddr,
-            port: this.config.port,
-          }),
+        JSON.stringify({
+          ipaddr: this.config.ipAddr,
+          port: this.config.port,
+        }),
       );
   }
 }
